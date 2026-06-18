@@ -27,10 +27,12 @@ if os.path.exists(CONFIG_PATH):
         API_BASE = _cfg.get('api_base', 'https://api.deepseek.com')
         API_MODEL = _cfg.get('model', 'deepseek-chat')
         TAVILY_KEY = _cfg.get('tavily_key', '')
+        ALLOWED_MODELS = _cfg.get('models', [{'id': 'deepseek-chat', 'name': 'DeepSeek Chat'}, {'id': 'deepseek-reasoner', 'name': 'DeepSeek Reasoner'}])
     except Exception as e:
         print(f'[WARN] 读取 config.json 失败: {e}')
 else:
     print('[WARN] config.json 不存在，API_KEY 和 TAVILY_KEY 为空')
+    ALLOWED_MODELS = [{'id': 'deepseek-chat', 'name': 'DeepSeek Chat'}, {'id': 'deepseek-reasoner', 'name': 'DeepSeek Reasoner'}]
 
 PROVINCES = ['北京','天津','上海','重庆','河北','山西','辽宁','吉林','黑龙江','江苏','浙江','安徽',
              '福建','江西','山东','河南','湖北','湖南','广东','广西','海南','四川','贵州','云南',
@@ -85,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send({'error': '服务端未配置 API_KEY'}, 500)
                 url = API_BASE.rstrip('/') + '/v1/chat/completions'
                 payload = json.dumps({
-                    'model': API_MODEL,
+                    'model': body.get('model', API_MODEL) if body.get('model') in [m['id'] for m in ALLOWED_MODELS] else API_MODEL,
                     'messages': messages,
                     'temperature': 0.7
                 }).encode('utf-8')
@@ -138,6 +140,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send({'error': 'Not Found'}, 404)
 
     def do_GET(self):
+        if self.path == '/api/models':
+            return self._send({'models': ALLOWED_MODELS, 'default': API_MODEL})
         if self.path == '/ping':
             return self._send({'ok':True,'db':HAS_DB})
         if self.path.startswith('/query'):
@@ -290,6 +294,7 @@ body{font:14px/1.7 'PingFang SC','Microsoft YaHei',sans-serif;background:var(--b
 <div class="list" id="chatList"></div><div class="new-btn" id="newBtn">+ 新建对话</div></div>
 <div class="main"><div class="bar"><span class="logo">雪峰Agent</span>
 <button id="btnG" class="on">报考</button><button id="btnF">娱乐</button>
+<select id="modelSel" style="padding:4px 8px;border:1px solid var(--bdr);border-radius:6px;background:var(--card);color:var(--txt);font-size:12px;cursor:pointer"></select>
 <img id="avt" src="/img_suit.png"><button id="themeBtn">🌓</button></div>
 <div class="msgs" id="msgArea"><div class="welcome"><div class="icon">🎓</div><h2>报考模式</h2><p>输入分数省份位次帮你盘志愿</p></div></div>
 <div class="inp"><textarea id="inp" placeholder="输入消息..."></textarea><button id="sendBtn">发送</button></div></div>
@@ -326,7 +331,8 @@ async function send(){
   var info=extractInfo(t);if(info.province){var pr='【省份志愿政策提醒】';var ng={'浙江':80,'山东':96,'河北':96,'重庆':96,'辽宁':112};var gg={'江苏':40,'广东':45,'湖北':45,'湖南':45,'福建':40,'北京':30,'天津':50,'上海':24,'海南':24,'河南':48,'四川':45,'陕西':45,'山西':45,'云南':40,'贵州':45,'内蒙古':45,'安徽':45,'江西':45,'黑龙江':40,'吉林':40,'广西':40,'甘肃':45,'新疆':45,'宁夏':45,'青海':45,'西藏':45};if(ng[info.province]){pr+=info.province+'是专业+院校模式，可填'+ng[info.province]+'个志愿。你必须推荐足够多的学校(至少30-50所)，不要只给3-5所！';}else if(gg[info.province]){pr+=info.province+'是院校+专业组模式，可填'+gg[info.province]+'个专业组。你必须推荐足够数量，填满80%以上位置！';}else{pr+=info.province+'请推荐足够多的学校和专业，并提醒注意调剂风险。';}ms.push({role:'system',content:pr});}
   for(var i=Math.max(0,c.msgs.length-25);i<c.msgs.length;i++)ms.push({role:c.msgs[i].role,content:c.msgs[i].content});
   try{
-    var r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:ms})});
+    var selModel=S('modelSel');var model=selModel?selModel.value:'';
+    var r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:ms,model:model})});
     if(!r.ok){var e=await r.json().catch(function(){return{};});throw new Error(e.error||'HTTP '+r.status);}
     var d=await r.json();var reply=d.choices[0].message.content;
     if(dh&&dh.indexOf('暂无数据')<0)reply='[查询到的数据]\n'+dh+'\n---\n'+reply;
@@ -476,6 +482,25 @@ B('chatList','onclick',function(e){var el=e.target;if(el.dataset.del){delChat(el
 try{
 if(localStorage.getItem('xf_dark')==='1')document.body.classList.add('dark');
 if(!curId||!chats[curId]){var nid=Date.now()+'';chats[nid]={name:'新对话',mode:mode,msgs:[]};curId=nid;save();}
+// 加载模型列表
+fetch('/api/models').then(function(r){return r.json();}).then(function(d){
+  var sel=S('modelSel');
+  if(!sel)return;
+  sel.innerHTML='';
+  (d.models||[]).forEach(function(m){
+    var o=document.createElement('option');
+    o.value=m.id;o.textContent=m.name;
+    sel.appendChild(o);
+  });
+  var saved=localStorage.getItem('xf_model')||d.default||'deepseek-chat';
+  sel.value=saved;
+  if(!sel.value&&sel.options.length)sel.selectedIndex=0;
+}).catch(function(){});
+
+S('modelSel').onchange=function(){
+  localStorage.setItem('xf_model',this.value);
+};
+
 setMode(mode);render();
 }catch(e){console.warn('init error:',e.message);document.body.innerHTML='<div style=\"padding:40px;text-align:center\"><h2>加载失败</h2><p>请清除浏览器缓存后刷新 (Ctrl+Shift+Del)</p></div>';}
 </script></body></html>'''
