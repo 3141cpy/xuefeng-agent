@@ -1,0 +1,5 @@
+- [x] Python版本>=3.10已确认
+- [x] 录取数据库已解压（admission_clean.db存在）
+- [x] Web服务器在8765端口成功启动
+- [x] /ping接口返回 {"ok": true, "db": true}
+- [x] 浏览器可访问 http://localhost:8765 看到完整界面
