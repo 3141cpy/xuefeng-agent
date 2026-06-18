@@ -13,6 +13,25 @@ if not os.path.exists(DB_PATH) and os.path.exists(GZ_PATH):
 
 HAS_DB = os.path.exists(DB_PATH)
 
+# --- 读取服务端配置 ---
+CONFIG_PATH = os.path.join(HERE, 'config.json')
+API_KEY = ''
+API_BASE = 'https://api.deepseek.com'
+API_MODEL = 'deepseek-chat'
+TAVILY_KEY = ''
+if os.path.exists(CONFIG_PATH):
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as _cf:
+            _cfg = json.load(_cf)
+        API_KEY = _cfg.get('api_key', '')
+        API_BASE = _cfg.get('api_base', 'https://api.deepseek.com')
+        API_MODEL = _cfg.get('model', 'deepseek-chat')
+        TAVILY_KEY = _cfg.get('tavily_key', '')
+    except Exception as e:
+        print(f'[WARN] 读取 config.json 失败: {e}')
+else:
+    print('[WARN] config.json 不存在，API_KEY 和 TAVILY_KEY 为空')
+
 PROVINCES = ['北京','天津','上海','重庆','河北','山西','辽宁','吉林','黑龙江','江苏','浙江','安徽',
              '福建','江西','山东','河南','湖北','湖南','广东','广西','海南','四川','贵州','云南',
              '西藏','陕西','甘肃','青海','宁夏','新疆','内蒙古']
@@ -49,9 +68,74 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin','*')
-        self.send_header('Access-Control-Allow-Methods','GET,OPTIONS')
+        self.send_header('Access-Control-Allow-Methods','GET,POST,OPTIONS')
         self.send_header('Access-Control-Allow-Headers','*')
         self.end_headers()
+
+    def _read_body(self):
+        length = int(self.headers.get('Content-Length', 0))
+        return self.rfile.read(length)
+
+    def do_POST(self):
+        if self.path == '/api/chat':
+            try:
+                body = json.loads(self._read_body().decode('utf-8'))
+                messages = body.get('messages', [])
+                if not API_KEY:
+                    return self._send({'error': '服务端未配置 API_KEY'}, 500)
+                url = API_BASE.rstrip('/') + '/v1/chat/completions'
+                payload = json.dumps({
+                    'model': API_MODEL,
+                    'messages': messages,
+                    'temperature': 0.7
+                }).encode('utf-8')
+                req = urllib.request.Request(url, data=payload, method='POST')
+                req.add_header('Content-Type', 'application/json')
+                req.add_header('Authorization', 'Bearer ' + API_KEY)
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                return self._send(data)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='replace')
+                try:
+                    err_json = json.loads(err_body)
+                except Exception:
+                    err_json = {'error': {'message': err_body[:500]}}
+                return self._send({'error': err_json.get('error', {}).get('message', f'HTTP {e.code}')}, e.code)
+            except Exception as e:
+                return self._send({'error': str(e)}, 500)
+
+        elif self.path == '/api/search':
+            try:
+                body = json.loads(self._read_body().decode('utf-8'))
+                query = body.get('query', '')
+                max_results = body.get('max_results', 3)
+                if not TAVILY_KEY:
+                    return self._send({'error': '服务端未配置 TAVILY_KEY'}, 500)
+                payload = json.dumps({
+                    'query': query,
+                    'search_depth': 'basic',
+                    'include_answer': True,
+                    'max_results': max_results
+                }).encode('utf-8')
+                req = urllib.request.Request('https://api.tavily.com/search', data=payload, method='POST')
+                req.add_header('Content-Type', 'application/json')
+                req.add_header('Authorization', 'Bearer ' + TAVILY_KEY)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                return self._send(data)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='replace')
+                try:
+                    err_json = json.loads(err_body)
+                except Exception:
+                    err_json = {'error': {'message': err_body[:500]}}
+                return self._send({'error': err_json.get('error', {}).get('message', f'HTTP {e.code}')}, e.code)
+            except Exception as e:
+                return self._send({'error': str(e)}, 500)
+
+        else:
+            self._send({'error': 'Not Found'}, 404)
 
     def do_GET(self):
         if self.path == '/ping':
@@ -186,7 +270,7 @@ body{font:14px/1.7 'PingFang SC','Microsoft YaHei',sans-serif;background:var(--b
 .bar{height:60px;display:flex;align-items:center;padding:0 20px;border-bottom:2px solid var(--bdr);gap:12px;background:var(--side)}
 .bar .logo{font-weight:700;font-size:17px;margin-right:auto}
 .bar button{padding:6px 12px;border:1px solid var(--bdr);border-radius:6px;background:var(--card);cursor:pointer;font-size:12px;color:var(--txt)}
-.bar button.on{background:var(--red);color:#fff;border-color:var(--red)}.bar .api-btn{background:var(--red);color:#fff;border-color:var(--red)}
+.bar button.on{background:var(--red);color:#fff;border-color:var(--red)}
 .bar img{width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--bdr)}
 .msgs{flex:1;overflow-y:auto;padding:20px 40px}
 .welcome{text-align:center;margin-top:80px;color:var(--t2)}.welcome .icon{font-size:48px;margin-bottom:12px}
@@ -196,12 +280,6 @@ body{font:14px/1.7 'PingFang SC','Microsoft YaHei',sans-serif;background:var(--b
 .inp{padding:12px 20px 20px;display:flex;gap:8px}
 .inp textarea{flex:1;padding:12px;border:1px solid var(--bdr);border-radius:6px;font:inherit;resize:none;height:50px;background:var(--card);color:var(--txt);outline:none}
 .inp textarea:focus{border-color:var(--red)}.inp button{padding:0 20px;background:var(--red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600}
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;display:none;align-items:center;justify-content:center}
-.overlay>div{background:var(--card);border-radius:12px;padding:28px;width:460px;border:1px solid var(--bdr)}
-.overlay h3{margin-bottom:16px}.overlay label{display:block;font-size:11px;color:var(--t2);margin:12px 0 4px}
-.overlay input{width:100%;padding:10px;border:1px solid var(--bdr);border-radius:6px;font:inherit;background:var(--bg);color:var(--txt)}
-.overlay .btns{display:flex;gap:8px;margin-top:20px}.overlay .btns button{padding:10px 20px;border:1px solid var(--bdr);border-radius:6px;cursor:pointer}.overlay .btns .ok{flex:1;background:var(--red);color:#fff}
-.st{font-size:12px;margin-top:10px}.st.g{color:var(--green)}.st.b{color:var(--red)}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--t2);animation:dot 1.4s infinite;margin:0 2px}
 .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
 @keyframes dot{0%,80%,100%{transform:scale(.6)}40%{transform:scale(1)}}
@@ -212,15 +290,9 @@ body{font:14px/1.7 'PingFang SC','Microsoft YaHei',sans-serif;background:var(--b
 <div class="list" id="chatList"></div><div class="new-btn" id="newBtn">+ 新建对话</div></div>
 <div class="main"><div class="bar"><span class="logo">雪峰Agent</span>
 <button id="btnG" class="on">报考</button><button id="btnF">娱乐</button>
-<img id="avt" src="/img_suit.png"><button id="themeBtn">🌓</button><button class="api-btn" id="apiBtn">API设置</button></div>
+<img id="avt" src="/img_suit.png"><button id="themeBtn">🌓</button></div>
 <div class="msgs" id="msgArea"><div class="welcome"><div class="icon">🎓</div><h2>报考模式</h2><p>输入分数省份位次帮你盘志愿</p></div></div>
 <div class="inp"><textarea id="inp" placeholder="输入消息..."></textarea><button id="sendBtn">发送</button></div></div>
-<div class="overlay" id="setOverlay"><div><h3>API设置</h3>
-<label>Base URL</label><input id="sUrl" placeholder="https://api.deepseek.com">
-<label>API Key</label><input type="password" id="sKey" placeholder="sk-...">
-<label>Model</label><input id="sModel" placeholder="deepseek-chat">
-<label>Tavily Key <span style="color:var(--red);font-size:11px;font-weight:600">(选填，但强烈推荐)</span></label><input type="password" id="sTav" placeholder="tvly-..."><div style="background:var(--side);border-radius:6px;padding:8px 10px;margin:4px 0 8px;font-size:11px;line-height:1.6;color:var(--txt)"><b>做什么的？</b> AI联网搜索引擎，比百度精准10倍，专为AI设计。<br><b>为什么推荐？</b> 填了之后Agent会自动搜索最新分数线、学校环境、王牌专业、就业薪资——回答质量天差地别。<br><b>要钱吗？</b> 免费额度每月1000次，正常使用完全够。<br><b>怎么获取？</b> 打开 <a href=\"https://tavily.com\" target=\"_blank\" style=\"color:var(--red);font-weight:600\">tavily.com</a> → 点 Get Started（Google/GitHub账号直接登）→ 复制 tvly- 开头的Key → 粘贴到这里。<br><b>不填行不行？</b> 行，但联网搜索基本废了（百度反爬），建议花1分钟注册。</div>
-<div class="btns"><button id="closeSetBtn">取消</button><button class="ok" id="testBtn">保存并测试</button></div><div class="st" id="st"></div></div></div>
 <script>
 var chats,curId,mode;try{chats=JSON.parse(localStorage.getItem('xf_chats')||'{}');}catch(e){chats={};localStorage.removeItem('xf_chats');}curId=localStorage.getItem('xf_cur')||'';mode=localStorage.getItem('xf_mode')||'gaokao';
 var PG="你是资深高考志愿规划师，风格直爽接地气，像张雪峰一样。\n\n【核心规则】\n1. 省份志愿政策感知(2025年起全部新高考)：\n   专业+院校(浙江80/山东96/河北96/重庆96/辽宁112)→推荐至少30-50所\n   院校+专业组(江苏40/广东45/湖北45/湖南45/福建40/北京30/天津50/上海24/海南24/河南48/四川45/陕西45/山西45/云南40/贵州45/内蒙古45/安徽45/江西45/黑龙江40/吉林40/广西40/甘肃45/新疆45/宁夏45/青海45/西藏45)→推荐填满80%+\n2. 冲稳保比例：冲20%稳50%保30%，保底至少3个\n3. 用户提供的数据（省份、分数、位次、选科、家庭背景等）默认准确，不质疑、不反问（你确定吗）。即使和数据库对不上，也按用户说的来，数据库只做参考。\n4. 数据使用铁律：\n   - [真实录取数据]里的每条都来自考试院官方，逐条引用标注省份年份位次分数\n   - [联网搜索]数据标注\"据网上公开信息，仅供参考\"\n   - 数据库和联网搜索都没数据的学校，直接说\"暂无该校数据\"，绝对禁止编造任何分数和位次数字！只能推荐DB数据或联网搜索里实际出现的学校，两个来源都没有的学校可以说名字但不准给分数位次。\n   - 【死命令】如果DB返回空+联网也没搜到具体位次，你只能说\"建议查省考试院官网\"，不准说'据网上公开信息约XXX分'来模糊编造。没有就是没有。\n4. 专业过滤铁律（极其重要！）：\n   - 用户说了想学什么专业，就只推荐这些专业或相关方向\n   - 用户明确排斥的专业（如生化环材/土木/护理等）一律过滤掉，提都不要提\n   - DB数据里混了不相关的专业（如用户要计算机结果DB返回了中医学），你必须手动筛掉\n   - 优先推荐专业对口的学校，即使它的位次稍远，也比专业不对口的学校强\n5. 普通家庭优先技术类(计算机/软件/电子/电气/自动化/机械)。无公检法资源慎选法学\n6. 生化环材土木护理等天坑专业主动提醒用户避开\n\n【回答结构】\n第1步:确认省份政策→\"你是XX省考生，XX模式，可填N个志愿...\"\n第2步:冲的学校——只推荐专业对口的，逐一列出DB数据或联网数据，没数据的跳过\n第3步:稳的学校——同上，优先专业对口的\n第4步:保的学校——同上\n第5步:补充建议\n\n重要:不要只给3-5所学校。DB数据的学校优先推荐。没有真实数据的学校不要瞎编分数位次。\n\n【追问规则】回答末尾必须检查这些信息是否清楚（不全就问，全就不问）：\n1.省份+文理科 2.分数+位次 3.选科 4.想学什么+排斥什么 5.家里在哪/想去哪 6.父母做什么+年收入 7.家里有没有公检法/电网/医疗/教育系统的资源 8.考研还是直接就业 9.要不要冲985211还是行业强校就行 10.接不接受调剂 11.学费接受范围（普通家庭中外合作慎推）。从缺失的信息里挑1-2个最关键的，用自然的口吻追问，给出提问模板。";
@@ -245,7 +317,6 @@ async function send(){
   var inp=S('inp');if(!inp)return;var t=inp.value.trim();if(!t)return;inp.value='';
   if(!curId||!chats[curId])newChat();var c=chats[curId];if(!c){c={name:'新对话',mode:mode,msgs:[]};chats[curId]=c;}c.msgs.push({role:'user',content:t});if(c.name==='新对话')c.name=t.slice(0,16);render();save();
   var a=S('msgArea');if(!a)return;var ld=document.createElement('div');ld.className='bubble a';ld.innerHTML='<div class=\"who\">...</div><span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>';a.appendChild(ld);a.scrollTop=a.scrollHeight;
-  var cfg=getCfg();if(!cfg.key){c.msgs.push({role:'assistant',content:'请先点API设置填写Key'});render();save();return;}
   var dh='';if(c.mode==='gaokao')dh=await queryData(t);
   var prompt=(c.mode==='fun')?PF:PG;var ms=[{role:'system',content:prompt}];
   console.log('dataHint length:',dh.length);
@@ -255,8 +326,8 @@ async function send(){
   var info=extractInfo(t);if(info.province){var pr='【省份志愿政策提醒】';var ng={'浙江':80,'山东':96,'河北':96,'重庆':96,'辽宁':112};var gg={'江苏':40,'广东':45,'湖北':45,'湖南':45,'福建':40,'北京':30,'天津':50,'上海':24,'海南':24,'河南':48,'四川':45,'陕西':45,'山西':45,'云南':40,'贵州':45,'内蒙古':45,'安徽':45,'江西':45,'黑龙江':40,'吉林':40,'广西':40,'甘肃':45,'新疆':45,'宁夏':45,'青海':45,'西藏':45};if(ng[info.province]){pr+=info.province+'是专业+院校模式，可填'+ng[info.province]+'个志愿。你必须推荐足够多的学校(至少30-50所)，不要只给3-5所！';}else if(gg[info.province]){pr+=info.province+'是院校+专业组模式，可填'+gg[info.province]+'个专业组。你必须推荐足够数量，填满80%以上位置！';}else{pr+=info.province+'请推荐足够多的学校和专业，并提醒注意调剂风险。';}ms.push({role:'system',content:pr});}
   for(var i=Math.max(0,c.msgs.length-25);i<c.msgs.length;i++)ms.push({role:c.msgs[i].role,content:c.msgs[i].content});
   try{
-    var r=await fetch(cfg.url.replace(/\/+$/,'')+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.key},body:JSON.stringify({model:cfg.model||'deepseek-chat',messages:ms,temperature:0.7})});
-    if(!r.ok){var e=await r.json().catch(function(){return{};});throw new Error(e.error&&e.error.message||'HTTP '+r.status);}
+    var r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:ms})});
+    if(!r.ok){var e=await r.json().catch(function(){return{};});throw new Error(e.error||'HTTP '+r.status);}
     var d=await r.json();var reply=d.choices[0].message.content;
     if(dh&&dh.indexOf('暂无数据')<0)reply='[查询到的数据]\n'+dh+'\n---\n'+reply;
     else reply='[查询参数] '+dh+'\n---\n'+reply;
@@ -295,17 +366,13 @@ function extractInfo(t){
   return info;
 }
 
-// ===== 联网搜索：Tavily优先，Baidu兜底 =====
-async function searchWeb(query, cfg, n){
+// ===== 联网搜索：通过服务端代理 =====
+async function searchWeb(query, n){
   n=n||3;var results=[];
-  if(cfg.tavily){
-    try{
-      var ctrl=new AbortController();var to=setTimeout(function(){ctrl.abort();},12000);
-      var r=await fetch('https://api.tavily.com/search',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.tavily},body:JSON.stringify({query:query,search_depth:'basic',include_answer:true,max_results:n}),signal:ctrl.signal});
-      clearTimeout(to);
-      if(r.ok){var d=await r.json();if(d.answer)results.push('[Tavily总结] '+d.answer);if(d.results){d.results.forEach(function(x){results.push(x.title+': '+x.content.slice(0,300));});}}
-    }catch(e){console.warn('Tavily failed:',e.message);}
-  }
+  try{
+    var r=await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,max_results:n})});
+    if(r.ok){var d=await r.json();if(d.answer)results.push('[Tavily总结] '+d.answer);if(d.results){d.results.forEach(function(x){results.push(x.title+': '+x.content.slice(0,300));});}}
+  }catch(e){console.warn('Tavily search failed:',e.message);}
   if(!results.length){
     try{
       var r2=await fetch('/search?q='+encodeURIComponent(query));
@@ -317,7 +384,6 @@ async function searchWeb(query, cfg, n){
 
 // ===== 主数据管线：AI分析提取→DB搜→联网搜→整合 =====
 async function queryData(t){
-  var cfg=getCfg();
   var info={province:'',rank:0,score:0,majors:[],schools:[],keywords:[]};
 
   // 直接正则提取（不用AI，避免API卡住）
@@ -383,7 +449,7 @@ async function queryData(t){
     var allWeb=[];
     for(var b=0;b<finalQ.length;b+=3){
       var batch=finalQ.slice(b,b+5);
-      var tasks=[];for(var i=0;i<batch.length;i++){tasks.push(searchWeb(batch[i],cfg,2));}
+      var tasks=[];for(var i=0;i<batch.length;i++){tasks.push(searchWeb(batch[i],2));}
       try{var results=await Promise.all(tasks);for(var i=0;i<results.length;i++){allWeb=allWeb.concat(results[i]);}}catch(e){console.warn('批次搜索失败:',e.message);}
     }
     var seen={};var unique=[];
@@ -398,18 +464,12 @@ async function queryData(t){
   if(!dbData&&!webData)result+='DB和联网搜索均无结果。查询URL: recommend?province='+encodeURIComponent(info.province)+'&rank='+info.rank+'&score='+info.score+'&keyword='+encodeURIComponent((info.majors||[]).join(','))+'\n';
   return result;
 }
-function getCfg(){return{url:localStorage.getItem('cf_url')||'https://api.deepseek.com',key:localStorage.getItem('cf_key')||'',model:localStorage.getItem('cf_model')||'deepseek-chat',tavily:localStorage.getItem('cf_tav')||''};}
-function openSet(){var ov=S('setOverlay');if(ov)ov.style.display='flex';var c=getCfg();var su=S('sUrl'),sk=S('sKey'),sm=S('sModel'),st=S('sTav');if(su)su.value=c.url;if(sk)sk.value=c.key;if(sm)sm.value=c.model;if(st)st.value=c.tavily;}
-function closeSet(){var ov=S('setOverlay');if(ov)ov.style.display='none';}
-async function testConn(){var su=S('sUrl'),sk=S('sKey'),sm=S('sModel'),sv=S('sTav'),stt=S('st');if(!su||!sk||!stt)return;var u=su.value.trim(),k=sk.value.trim(),m=sm?sm.value.trim():'',tv=sv?sv.value.trim():'';if(!u||!k){stt.innerHTML='<span class=\"st b\">请填写URL和Key</span>';return;}try{localStorage.setItem('cf_url',u);localStorage.setItem('cf_key',k);localStorage.setItem('cf_model',m);if(tv)localStorage.setItem('cf_tav',tv);}catch(e){}stt.textContent='测试中...';try{var r=await fetch(u.replace(/\/+$/,'')+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:m||'deepseek-chat',messages:[{role:'user',content:'hi'}],max_tokens:5})});if(r.ok){stt.innerHTML='<span class=\"st g\">连接OK</span>';setTimeout(closeSet,800);}else{var e=await r.json().catch(function(){return{};});stt.innerHTML='<span class=\"st b\">'+(e.error&&e.error.message||'')+'</span>';}}catch(e){stt.innerHTML='<span class=\"st b\">'+e.message+'</span>';}}
 
 // Event bindings
 function B(id,ev,fn){var el=S(id);if(el)el[ev]=fn;}
 B('btnG','onclick',function(){setMode('gaokao');});B('btnF','onclick',function(){setMode('fun');});
 B('newBtn','onclick',function(){newChat();});B('sendBtn','onclick',function(){send();});
 B('themeBtn','onclick',function(){document.body.classList.toggle('dark');localStorage.setItem('xf_dark',document.body.classList.contains('dark')?'1':'');});
-B('apiBtn','onclick',function(){openSet();});B('closeSetBtn','onclick',function(){closeSet();});B('testBtn','onclick',function(){testConn();});
-B('setOverlay','onclick',function(e){if(e.target===this)closeSet();});
 B('inp','onkeydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 B('chatList','onclick',function(e){var el=e.target;if(el.dataset.del){delChat(el.dataset.del);return;}var item=el.closest('.item');if(item){curId=item.dataset.id;if(chats[curId]&&chats[curId].mode)setMode(chats[curId].mode);else render();save();}});
 // init

@@ -1,0 +1,6 @@
+- [x] 网页源码中不包含任何 API Key 字符串（sk- 或 tvly- 开头的）
+- [x] /api/chat 端点正常工作，能返回 AI 回复
+- [x] /api/search 端点正常工作，能返回搜索结果
+- [x] 浏览器 Network 请求中不包含任何 API Key
+- [x] config.json 配置文件权限为 600（仅 root 可读）
+- [x] 聊天功能端到端测试通过（发送问题，收到回复）
