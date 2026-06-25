@@ -43,10 +43,10 @@ def query_db(province=None, school=None, major=None, limit=50):
     conn = sqlite3.connect(DB_PATH)
     conds, params = [], []
     if province: conds.append("province LIKE ?"); params.append(f"%{province}%")
-    if school: conds.append("school LIKE ?"); params.append(f"%{school}%")
-    if major: conds.append("major LIKE ?"); params.append(f"%{major}%")
+    if school: conds.append("school_name LIKE ?"); params.append(f"%{school}%")
+    if major: conds.append("major_name LIKE ?"); params.append(f"%{major}%")
     if not conds: conn.close(); return None
-    sql = f"SELECT province,year,school_name,major_name,score,rank FROM admission WHERE {' AND '.join(conds)} AND rank>100 ORDER BY year DESC,rank ASC LIMIT ?"
+    sql = f"SELECT province,year,school_name,major_name,score,rank FROM admission WHERE {' AND '.join(conds)} ORDER BY year DESC,rank ASC LIMIT ?"
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     conn.close()
@@ -145,11 +145,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/ping':
             return self._send({'ok':True,'db':HAS_DB})
         if self.path.startswith('/query'):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            raw = self.path.encode('latin-1', errors='replace').decode('utf-8', errors='replace')
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
             rows = query_db(qs.get('province',[''])[0], qs.get('school',[''])[0], qs.get('major',[''])[0])
             return self._send({'db':rows,'count':len(rows) if rows else 0})
         if self.path.startswith('/recommend'):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            raw = self.path.encode('latin-1', errors='replace').decode('utf-8', errors='replace')
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
             prov = qs.get('province',[''])[0]
             major = qs.get('major',[''])[0]
             keyword = qs.get('keyword',[''])[0]
